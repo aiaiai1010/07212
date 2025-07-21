@@ -108,4 +108,49 @@
         const bent = pitch <= 40 ? (dir !== '上') : (dir === '下');
 
         const ix = Math.floor(nose.x * depthCanvas.width);
-        con
+        const iy = Math.floor(nose.y * depthCanvas.height);
+        const safeX = Math.max(0, Math.min(ix - 10, depthCanvas.width - 20));
+        const safeY = Math.max(0, Math.min(iy - 10, depthCanvas.height - 20));
+        const imgData = dctx.getImageData(safeX, safeY, 20, 20).data;
+
+        let sum = 0, count = 0;
+        for (let i = 0; i < imgData.length; i += 4) {
+          sum += imgData[i];
+          count++;
+        }
+        const avg = sum / count;
+
+        out.textContent = 
+          `Pitch: ${pitch.toFixed(1)}° Roll: ${roll.toFixed(1)}°\n顔: ${dir}\n距離指標: ${avg.toFixed(1)}`;
+
+        let msg = bent ? '首が曲がっています\n' : '首は自然です\n';
+        msg += avg < 50 ? '近すぎます' : avg > 200 ? '離れすぎています' : '適切な距離です';
+        warn.textContent = msg;
+        warn.style.color = (bent || avg < 50 || avg > 200) ? 'red' : 'green';
+
+      } catch (e) {
+        console.error("処理エラー:", e);
+      } finally {
+        processing = false;
+      }
+    }
+
+    document.getElementById('startBtn').onclick = async () => {
+      estimator = await initDepth();
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } });
+      video.srcObject = stream;
+      await new Promise(r => video.onloadedmetadata = r);
+      canvas.width = depthCanvas.width = 360;
+      canvas.height = depthCanvas.height = 640;
+
+      new Camera(video, {
+        onFrame: async () => await faceMesh.send({ image: video }),
+        width: 640,
+        height: 360
+      }).start();
+
+      document.getElementById('startBtn').style.display = 'none';
+    };
+  </script>
+</body>
+</html>
