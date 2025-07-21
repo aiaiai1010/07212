@@ -98,8 +98,44 @@
 
         ctx.drawImage(results.image, 0, 0);
         const depthMap = await estimator.estimateDepth(video, { minDepth: 0, maxDepth: 1 });
-        const depthImg = await depthMap.toCanvasImageSource();
-        dctx.drawImage(depthImg, 0, 0);  // ← 深度表示
+        const depthTensor = depthMap.depth; // tf.Tensor2D
+
+        // Tensor を 0〜1 に正規化して Uint8 に変換（0〜255）
+        const normalized = tf.tidy(() => {
+          const min = depthTensor.min();
+          const max = depthTensor.max();
+          return depthTensor.sub(min).div(max.sub(min)).mul(255).toInt();
+        });
+
+        const [w, h] = depthTensor.shape;
+        const depthArray = await normalized.data(); // Uint8Array
+
+        // カラーマップ適用（Jet風：青→水→緑→黄→赤）
+        function jetColor(v) {
+          const t = v / 255;
+          const r = Math.floor(255 * Math.max(Math.min(1.5 - Math.abs(4 * t - 3), 1), 0));
+          const g = Math.floor(255 * Math.max(Math.min(1.5 - Math.abs(4 * t - 2), 1), 0));
+          const b = Math.floor(255 * Math.max(Math.min(1.5 - Math.abs(4 * t - 1), 1), 0));
+          return [r, g, b];
+        }
+
+        // イメージバッファ生成
+        const imageData = dctx.createImageData(w, h);
+        for (let i = 0; i < depthArray.length; i++) {
+          const [r, g, b] = jetColor(depthArray[i]);
+          imageData.data[i * 4 + 0] = r;
+          imageData.data[i * 4 + 1] = g;
+          imageData.data[i * 4 + 2] = b;
+          imageData.data[i * 4 + 3] = 255;
+        }
+
+        // Canvas に描画
+        depthCanvas.width = w;
+        depthCanvas.height = h;
+        dctx.putImageData(imageData, 0, 0);
+
+        // メモリ解放
+        tf.dispose([depthTensor, normalized]);
 
         const lm = results.multiFaceLandmarks[0];
         const nose = lm[1], chin = lm[152];
