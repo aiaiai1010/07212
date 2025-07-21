@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <title>姿勢＋深度検出 完全版（深度表示あり）</title>
+  <title>姿勢＋深度検出 完全版（カラー深度表示）</title>
   <style>
     body {
       font-size: 20px; display: flex; flex-direction: column;
@@ -12,7 +12,7 @@
     #content {
       display: flex; gap: 10px; margin-top: 10px;
     }
-    video, canvas  {
+    video, canvas {
       width: 360px; height: 640px; border: 1px solid #aaa;
       transform: scaleX(-1);
     }
@@ -21,19 +21,18 @@
   </style>
 </head>
 <body>
-  <h1>姿勢＋深度検出 完全版（深度表示あり）</h1>
+  <h1>姿勢＋深度検出 完全版（カラー深度表示）</h1>
   <button id="startBtn">開始</button>
   <div id="output">準備中...</div>
   <div id="warning"></div>
   <div id="content">
     <video id="video" autoplay playsinline muted></video>
     <canvas id="canvas"></canvas>
-    <canvas id="depthCanvas"></canvas> <!-- ← 表示に変更 -->
+    <canvas id="depthCanvas"></canvas>
   </div>
 
   <!-- ライブラリ読み込み -->
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/body-segmentation"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/depth-estimation"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
@@ -46,6 +45,7 @@
     const dctx = depthCanvas.getContext('2d');
     const out = document.getElementById('output');
     const warn = document.getElementById('warning');
+
     let pitch = 0, roll = 0;
     let estimator;
     let lastTimestamp = 0;
@@ -87,7 +87,6 @@
         }
         lastTimestamp = now;
 
-        // 顔未検出時の処理
         if (!results.multiFaceLandmarks || results.multiFaceLandmarks.length === 0) {
           out.textContent = `傾き: ${pitch.toFixed(1)}°, ${roll.toFixed(1)}°\n顔未検出`;
           warn.textContent = "顔が検出できません";
@@ -97,9 +96,37 @@
         }
 
         ctx.drawImage(results.image, 0, 0);
+
         const depthMap = await estimator.estimateDepth(video, { minDepth: 0, maxDepth: 1 });
-        const depthImg = await depthMap.toCanvasImageSource();
-        dctx.drawImage(depthImg, 0, 0);  // ← 深度表示
+        const depthTensor = depthMap.depth;
+        const [h, w] = depthTensor.shape;
+
+        const normalized = tf.tidy(() => {
+          return depthTensor.sub(depthTensor.min())
+            .div(depthTensor.max().sub(depthTensor.min()))
+            .clipByValue(0, 1);
+        });
+
+        const colored = tf.tidy(() => {
+          const r = normalized.mul(4).sub(1.5).abs().reverse().clipByValue(0, 1);
+          const g = normalized.mul(4).sub(2.5).abs().reverse().clipByValue(0, 1);
+          const b = normalized.mul(4).sub(3.5).abs().reverse().clipByValue(0, 1);
+          return tf.stack([r, g, b], 2);
+        });
+
+        const rgba = tf.tidy(() => {
+          const rgb = colored.mul(255).cast('int32');
+          const a = tf.ones([h, w, 1], 'int32').mul(255);
+          return tf.concat([rgb, a], 2);
+        });
+
+        const imageData = new ImageData(
+          Uint8ClampedArray.from(await rgba.data()),
+          w, h
+        );
+        dctx.putImageData(imageData, 0, 0);
+
+        tf.dispose([depthTensor, normalized, colored, rgba]);
 
         const lm = results.multiFaceLandmarks[0];
         const nose = lm[1], chin = lm[152];
@@ -120,7 +147,7 @@
         }
         const avg = sum / count;
 
-        out.textContent = 
+        out.textContent =
           `Pitch: ${pitch.toFixed(1)}° Roll: ${roll.toFixed(1)}°\n顔: ${dir}\n距離指標: ${avg.toFixed(1)}`;
 
         let msg = bent ? '首が曲がっています\n' : '首は自然です\n';
