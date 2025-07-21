@@ -5,30 +5,45 @@
   <title>姿勢＋深度検出 完全版（深度表示あり）</title>
   <style>
     body {
-      font-size: 20px; display: flex; flex-direction: column;
-      align-items: center; justify-content: center;
-      height: 100vh; margin: 0; text-align: center;
+      font-size: 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      margin: 0;
+      text-align: center;
     }
     #content {
-      display: flex; gap: 10px; margin-top: 10px;
+      display: flex;
+      gap: 10px;
+      margin-top: 10px;
     }
-    video, canvas  {
-      width: 360px; height: 640px; border: 1px solid #aaa;
+    video, canvas {
+      width: 360px;
+      height: 640px;
+      border: 1px solid #aaa;
       transform: scaleX(-1);
     }
-    #output { white-space: pre-line; margin: 10px; }
-    #warning { font-size: 24px; font-weight: bold; }
+    #output {
+      white-space: pre-line;
+      margin: 10px;
+    }
+    #warning {
+      font-size: 24px;
+      font-weight: bold;
+    }
   </style>
 </head>
 <body>
-  <h1>姿勢＋深度検出 完全版（深度表示あり）2</h1>
+  <h1>姿勢＋深度検出 完全版（深度表示あり）</h1>
   <button id="startBtn">開始</button>
   <div id="output">準備中...</div>
   <div id="warning"></div>
   <div id="content">
     <video id="video" autoplay playsinline muted></video>
     <canvas id="canvas"></canvas>
-    <canvas id="depthCanvas"></canvas> <!-- ← 表示に変更 -->
+    <canvas id="depthCanvas"></canvas>
   </div>
 
   <!-- ライブラリ読み込み -->
@@ -67,12 +82,14 @@
     const faceMesh = new FaceMesh({
       locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}`
     });
+
     faceMesh.setOptions({
       maxNumFaces: 1,
       refineLandmarks: true,
       minDetectionConfidence: 0.5,
       minTrackingConfidence: 0.3
     });
+
     faceMesh.onResults(onFace);
 
     async function onFace(results) {
@@ -87,7 +104,6 @@
         }
         lastTimestamp = now;
 
-        // 顔未検出時の処理
         if (!results.multiFaceLandmarks || results.multiFaceLandmarks.length === 0) {
           out.textContent = `傾き: ${pitch.toFixed(1)}°, ${roll.toFixed(1)}°\n顔未検出`;
           warn.textContent = "顔が検出できません";
@@ -97,10 +113,10 @@
         }
 
         ctx.drawImage(results.image, 0, 0);
-        const depthMap = await estimator.estimateDepth(video, { minDepth: 0, maxDepth: 1 });
-        const depthTensor = depthMap.depth; // tf.Tensor2D
 
-        // Tensor を 0〜1 に正規化して Uint8 に変換（0〜255）
+        const depthMap = await estimator.estimateDepth(video, { minDepth: 0, maxDepth: 1 });
+        const depthTensor = depthMap.depth;
+
         const normalized = tf.tidy(() => {
           const min = depthTensor.min();
           const max = depthTensor.max();
@@ -108,9 +124,8 @@
         });
 
         const [w, h] = depthTensor.shape;
-        const depthArray = await normalized.data(); // Uint8Array
+        const depthArray = await normalized.data();
 
-        // カラーマップ適用（Jet風：青→水→緑→黄→赤）
         function jetColor(v) {
           const t = v / 255;
           const r = Math.floor(255 * Math.max(Math.min(1.5 - Math.abs(4 * t - 3), 1), 0));
@@ -119,7 +134,6 @@
           return [r, g, b];
         }
 
-        // イメージバッファ生成
         const imageData = dctx.createImageData(w, h);
         for (let i = 0; i < depthArray.length; i++) {
           const [r, g, b] = jetColor(depthArray[i]);
@@ -129,12 +143,10 @@
           imageData.data[i * 4 + 3] = 255;
         }
 
-        // Canvas に描画
         depthCanvas.width = w;
         depthCanvas.height = h;
         dctx.putImageData(imageData, 0, 0);
 
-        // メモリ解放
         tf.dispose([depthTensor, normalized]);
 
         const lm = results.multiFaceLandmarks[0];
