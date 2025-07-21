@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>姿勢＋深度検出</title>
+  <style>
+    body { font-size:20px; display:flex; flex-direction:column;
+           align-items:center; justify-content:center; height:100vh; margin:0; text-align:center; }
+    #content { display:flex; gap:10px; margin-top:10px; }
+    video, canvas { width:320px; height:240px; border:1px solid #aaa; }
+    #output { white-space:pre-line; margin:10px; }
+    #warning { font-size:24px; font-weight:bold; }
+  </style>
+</head>
+<body>
+  <h1>姿勢＋深度検出</h1>
+  <button id="startBtn">開始</button>
+  <div id="output">準備中...</div>
+  <div id="warning"></div>
+  <div id="content">
+    <video id="video" autoplay playsinline muted></video>
+    <canvas id="canvas"></canvas>
+    <canvas id="depthCanvas"></canvas>
+  </div>
+
+  <!-- 必要なライブラリ -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/depth-estimation"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+
+  <script type="module">
+  const video = document.getElementById('video');
+  const canvas = document.getElementById('canvas');
+  const depthCanvas = document.getElementById('depthCanvas');
+  const ctx = canvas.getContext('2d');
+  const dctx = depthCanvas.getContext('2d');
+  const out = document.getElementById('output');
+  const warn = document.getElementById('warning');
+  let pitch=0, roll=0;
+
+  window.addEventListener('deviceorientation', e => {
+    pitch = e.beta ?? 0;
+    roll = e.gamma ?? 0;
+  });
+
+  async function initDepth() {
+    await tf.setBackend('webgl');
+    return await depthEstimation.createEstimator(depthEstimation.SupportedModels.ARPortraitDepth);
+  }
+
+  const faceMesh = new FaceMesh({
+    locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}`
+  });
+  faceMesh.setOptions({maxNumFaces:1, minDetectionConfidence:0.5, minTrackingConfidence:0.5});
+  faceMesh.onResults(onFace);
+
+  async function onFace(results) {
+    if (!results.multiFaceLandmarks) {
+      out.textContent = `傾き: ${pitch.toFixed(1)}°, ${roll.toFixed(1)}°\n顔未検出`;
+      warn.textContent="顔が検出できません"; warn.style.color='red';
+      return;
+    }
+    ctx.drawImage(results.image,0,0,canvas.width,canvas.height);
+    const lm = results.multiFaceLandmarks[0];
+    const nose = lm[1], chin = lm[152];
+    const yDiff = chin.y - nose.y;
+    const dir = yDiff < 0.13 ? '下を向き' : yDiff > 0.19 ? '上を向き' : 'まっすぐ';
+    const bent = pitch <= 40 ? (dir !== '上') : (dir === '下');
+
+    // 深度推定
+    const depthMap = await estimator.estimateDepth(video, {minDepth:0, maxDepth:1});
+    const depthImg = await depthMap.toCanvasImageSource();
+    dctx.drawImage(depthImg,0,0,depthCanvas.width,depthCanvas.height);
+
+    // ROI深度平均（鼻周辺20×20px）
+    const ix = Math.floor(nose.x * depthCanvas.width);
+    const iy = Math.floor(nose.y * depthCanvas.height);
+    const imgData = dctx.getImageData(ix-10, iy-10,20,20).data;
+    let sum=0,c=0;
+    for (let i=0;i<imgData.length;i+=4){ sum += imgData[i]; c++; }
+    const avg = sum/c;
+
+    out.textContent =
+      `Pitch: ${pitch.toFixed(1)}° Roll: ${roll.toFixed(1)}°\n顔: ${dir}\n距離指標: ${avg.toFixed(1)}`;
+    let msg = bent ? '首が曲がっています\n' : '首は自然です\n';
+    msg += avg < 50 ? '近すぎます' : avg > 200 ? '離れすぎています' : '適切な距離です';
+    warn.textContent = msg;
+    warn.style.color = bent || avg < 50 || avg > 200 ? 'red':'green';
+  }
+
+  let estimator;
+  async function start() {
+    estimator = await initDepth();  // tfjs MiDaSモデル読み込み :contentReference[oaicite:1]{index=1}
+    const stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:'user'}});
+    video.srcObject = stream;
+    await new Promise(r=>video.onloadedmetadata=r);
+    canvas.width = depthCanvas.width = video.videoWidth;
+    canvas.height = depthCanvas.height = video.videoHeight;
+    new Camera(video, {
+      onFrame: async () => { await faceMesh.send({image:video}); },
+      width: video.videoWidth,
+      height: video.videoHeight
+    }).start();
+    startBtn.style.display='none';
+  }
+
+  document.getElementById('startBtn').onclick = start;
+  </script>
+</body>
+</html>
